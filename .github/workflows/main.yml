@@ -1,0 +1,67 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 自動找出 Gradle 專案所在資料夾，並把常見的錯誤檔名（底線版）改回來。
+      # 同時把 repo 的檔案清單印出來，方便除錯。
+      - name: Locate Gradle project
+        id: loc
+        run: |
+          echo "---- repo files (depth 3) ----"
+          find . -maxdepth 3 -not -path "./.git/*" | sort | head -80
+          echo "------------------------------"
+          f=$(find . -maxdepth 3 \( -name settings.gradle.kts -o -name settings_gradle.kts \) -not -path "./.git/*" | head -1)
+          if [ -z "$f" ]; then
+            echo "::error::repo 裡找不到 settings.gradle.kts（請確認專案檔案有上傳到 repo）"
+            exit 1
+          fi
+          dir=$(dirname "$f")
+          echo "Gradle project dir: $dir"
+          if [ -f "$dir/settings_gradle.kts" ]; then mv "$dir/settings_gradle.kts" "$dir/settings.gradle.kts"; fi
+          if [ -f "$dir/build_gradle.kts" ]; then mv "$dir/build_gradle.kts" "$dir/build.gradle.kts"; fi
+          if [ ! -d "$dir/app" ]; then
+            echo "::error::$dir 底下沒有 app 資料夾"
+            exit 1
+          fi
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Build debug APK
+        working-directory: ${{ steps.loc.outputs.dir }}
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LineTreasureBot-debug-apk
+          path: ${{ steps.loc.outputs.dir }}/app/build/outputs/apk/debug/*.apk
+
+      - name: Run unit tests
+        if: always() && steps.loc.outcome == 'success'
+        working-directory: ${{ steps.loc.outputs.dir }}
+        run: gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Upload test report
+        if: always() && steps.loc.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: ${{ steps.loc.outputs.dir }}/app/build/reports/tests/testDebugUnitTest/
